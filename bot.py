@@ -3,12 +3,21 @@ import requests
 import asyncio
 from flask import Flask, request
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    filters, ContextTypes
+)
 
 # --- CONFIG ---
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-GROQ_API_KEY = os.environ["GROQ_API_KEY"]
-BOT_URL = os.environ["BOT_URL"]  # e.g., https://your-bot.onrender.com
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+BOT_URL = os.environ.get("BOT_URL")  # e.g., https://your-app.onrender.com
+
+# Validate environment variables
+if not TELEGRAM_TOKEN:
+    raise ValueError("TELEGRAM_TOKEN environment variable is missing!")
+if not BOT_URL:
+    raise ValueError("BOT_URL environment variable is missing!")
 
 # --- HELPERS ---
 def call_groq_api(prompt: str) -> str:
@@ -30,49 +39,29 @@ def call_groq_image(file_path: str) -> str:
 
 # --- TELEGRAM HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hello! Send me text or an image, and I'll answer or describe it.")
+    await update.message.reply_text("Hello! Send me text or an image, and I'll respond.")
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Thinking... 🤖")
-    try:
-        answer = call_groq_api(update.message.text)
-        await update.message.reply_text(answer)
-    except Exception as e:
-        await update.message.reply_text(f"Error: {e}")
-
-async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo = update.message.photo[-1]
-    file = await context.bot.get_file(photo.file_id)
-    file_path = f"temp_{photo.file_id}.jpg"
-    await file.download_to_drive(file_path)
-    await update.message.reply_text("Analyzing image... 🖼️")
-    try:
-        description = call_groq_image(file_path)
-        await update.message.reply_text(description)
-    except Exception as e:
-        await update.message.reply_text(f"Error: {e}")
-    finally:
-        if os.path.exists(file_path):
-            os.remove(file_path)
-
-# --- TELEGRAM APP ---
-app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-app.add_handler(MessageHandler(filters.PHOTO, handle_image))
-
-# Initialize the application for webhook processing
-loop = asyncio.get_event_loop()
-loop.run_until_complete(app.initialize())
-loop.run_until_complete(app.start())  # start internal tasks
+async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Temporary handler to test webhook & bot."""
+    await update.message.reply_text(f"✅ Received: {update.message.text}")
 
 # --- FLASK APP ---
 flask_app = Flask(__name__)
 
+# Initialize Telegram bot app
+app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))  # Echo test
+
+# --- Async loop for webhook updates ---
+main_loop = asyncio.get_event_loop()
+
 @flask_app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), app.bot)
-    asyncio.run_coroutine_threadsafe(app.process_update(update), loop)
+    # Schedule update processing in the bot's event loop
+    asyncio.run_coroutine_threadsafe(app.process_update(update), main_loop)
     return "OK"
 
 @flask_app.route("/")
@@ -87,5 +76,11 @@ async def set_webhook():
 
 # --- RUN ---
 if __name__ == "__main__":
-    loop.run_until_complete(set_webhook())
+    # 1️⃣ Initialize and start Telegram bot
+    main_loop.run_until_complete(app.initialize())
+    main_loop.run_until_complete(set_webhook())
+    main_loop.run_until_complete(app.start())
+    print("🤖 Bot initialized and running!")
+
+    # 2️⃣ Start Flask server
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
