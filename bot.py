@@ -1,17 +1,16 @@
 import os
 import requests
-import asyncio
 from flask import Flask, request
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Bot, Update
+from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters
 
 # --- CONFIG ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 BOT_URL = os.environ.get("BOT_URL")  # e.g., https://your-app.onrender.com
 
-if not TELEGRAM_TOKEN or not GROQ_API_KEY or not BOT_URL:
-    raise ValueError("Missing environment variables: TELEGRAM_TOKEN, GROQ_API_KEY, BOT_URL")
+bot = Bot(token=TELEGRAM_TOKEN)
+dispatcher = Dispatcher(bot=bot, update_queue=None, workers=0, use_context=True)
 
 # --- HELPERS ---
 def call_groq_api(prompt: str) -> str:
@@ -31,64 +30,56 @@ def call_groq_image(file_path: str) -> str:
     response.raise_for_status()
     return response.json().get("description", "Could not describe image.")
 
-# --- TELEGRAM HANDLERS ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hello! Send me text or an image, and I'll answer or describe it.")
+# --- HANDLERS ---
+def start(update, context):
+    update.message.reply_text("Hello! Send me text or an image, and I'll answer or describe it.")
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Thinking... 🤖")
+def handle_text(update, context):
+    update.message.reply_text("Thinking... 🤖")
     try:
         answer = call_groq_api(update.message.text)
-        await update.message.reply_text(answer)
+        update.message.reply_text(answer)
     except Exception as e:
-        await update.message.reply_text(f"Error: {e}")
+        update.message.reply_text(f"Error: {e}")
 
-async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def handle_image(update, context):
     photo = update.message.photo[-1]
-    file = await context.bot.get_file(photo.file_id)
+    file = bot.get_file(photo.file_id)
     file_path = f"temp_{photo.file_id}.jpg"
-    await file.download_to_drive(file_path)
-    await update.message.reply_text("Analyzing image... 🖼️")
+    file.download(file_path)
+    update.message.reply_text("Analyzing image... 🖼️")
     try:
-        description = call_groq_image(file_path)
-        await update.message.reply_text(description)
+        desc = call_groq_image(file_path)
+        update.message.reply_text(desc)
     except Exception as e:
-        await update.message.reply_text(f"Error: {e}")
+        update.message.reply_text(f"Error: {e}")
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
 
-# --- FLASK + TELEGRAM ---
-flask_app = Flask(__name__)
-app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+# --- REGISTER HANDLERS ---
+dispatcher.add_handler(CommandHandler("start", start))
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
+dispatcher.add_handler(MessageHandler(Filters.photo, handle_image))
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-app.add_handler(MessageHandler(filters.PHOTO, handle_image))
+# --- FLASK APP ---
+app = Flask(__name__)
 
-main_loop = asyncio.get_event_loop()
-
-@flask_app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
+@app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
-    update = Update.de_json(request.get_json(force=True), app.bot)
-    asyncio.run_coroutine_threadsafe(app.process_update(update), main_loop)
+    update = Update.de_json(request.get_json(force=True), bot)
+    dispatcher.process_update(update)
     return "OK"
 
-@flask_app.route("/")
+@app.route("/")
 def index():
     return "🤖 Bot is running on Render!"
 
-# --- SET WEBHOOK ---
-async def set_webhook():
-    webhook_url = f"{BOT_URL}/{TELEGRAM_TOKEN}"
-    await app.bot.set_webhook(webhook_url)
-    print(f"✅ Webhook set to: {webhook_url}")
-
-# --- RUN ---
 if __name__ == "__main__":
-    # Initialize bot only once
-    main_loop.run_until_complete(app.initialize())
-    main_loop.run_until_complete(set_webhook())
-    main_loop.run_until_complete(app.start())  # start the bot
-    print("🤖 Bot initialized and running (webhook mode)")
-    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    # Set webhook
+    webhook_url = f"{BOT_URL}/{TELEGRAM_TOKEN}"
+    bot.set_webhook(webhook_url)
+    print(f"✅ Webhook set to {webhook_url}")
+
+    # Start Flask server
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
