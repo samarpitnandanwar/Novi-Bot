@@ -1,7 +1,7 @@
 import os
 import requests
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from flask import Flask, request
 import asyncio
 
@@ -14,7 +14,7 @@ print("TELEGRAM_TOKEN =", TELEGRAM_TOKEN)
 print("GROQ_API_KEY =", GROQ_API_KEY)
 print("BOT_URL =", BOT_URL)
 
-# Validate environment variables
+# Validate env vars
 if not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_TOKEN environment variable is missing!")
 if not GROQ_API_KEY:
@@ -67,7 +67,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if os.path.exists(file_path):
             os.remove(file_path)
 
-# --- FLASK APP ---
+# --- FLASK + TELEGRAM APP ---
 flask_app = Flask(__name__)
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
@@ -76,27 +76,22 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 app.add_handler(MessageHandler(filters.PHOTO, handle_image))
 
 @flask_app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
-def webhook():
+async def webhook():
     """Receive updates from Telegram via webhook"""
     update = Update.de_json(request.get_json(force=True), app.bot)
-    asyncio.create_task(app.update_queue.put(update))  # fixed async issue
+    await app.process_update(update)  # direct handler instead of polling
     return "OK"
 
 @flask_app.route("/")
 def index():
     return "🤖 Bot is running on Render!"
 
-# --- SET WEBHOOK ---
+# --- SET WEBHOOK ON STARTUP ---
 async def set_webhook():
     webhook_url = f"{BOT_URL}/{TELEGRAM_TOKEN}"
     await app.bot.set_webhook(webhook_url)
     print(f"✅ Webhook set to: {webhook_url}")
 
-# --- RUN ---
 if __name__ == "__main__":
-    # Set webhook once before starting
-    asyncio.run(set_webhook())
-
-    # Start bot + Flask
-    app.run_polling(stop_signals=None, close_loop=False)  # background loop
+    asyncio.run(set_webhook())  # set webhook once
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
