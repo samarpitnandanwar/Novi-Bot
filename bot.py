@@ -3,21 +3,15 @@ import requests
 import asyncio
 from flask import Flask, request
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    filters, ContextTypes
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 # --- CONFIG ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 BOT_URL = os.environ.get("BOT_URL")  # e.g., https://your-app.onrender.com
 
-# Validate environment variables
-if not TELEGRAM_TOKEN:
-    raise ValueError("TELEGRAM_TOKEN environment variable is missing!")
-if not BOT_URL:
-    raise ValueError("BOT_URL environment variable is missing!")
+if not TELEGRAM_TOKEN or not GROQ_API_KEY or not BOT_URL:
+    raise ValueError("Missing environment variables: TELEGRAM_TOKEN, GROQ_API_KEY, BOT_URL")
 
 # --- HELPERS ---
 def call_groq_api(prompt: str) -> str:
@@ -39,28 +33,44 @@ def call_groq_image(file_path: str) -> str:
 
 # --- TELEGRAM HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hello! Send me text or an image, and I'll respond.")
+    await update.message.reply_text("Hello! Send me text or an image, and I'll answer or describe it.")
 
-async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Temporary handler to test webhook & bot."""
-    await update.message.reply_text(f"✅ Received: {update.message.text}")
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Thinking... 🤖")
+    try:
+        answer = call_groq_api(update.message.text)
+        await update.message.reply_text(answer)
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
-# --- FLASK APP ---
+async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    photo = update.message.photo[-1]
+    file = await context.bot.get_file(photo.file_id)
+    file_path = f"temp_{photo.file_id}.jpg"
+    await file.download_to_drive(file_path)
+    await update.message.reply_text("Analyzing image... 🖼️")
+    try:
+        description = call_groq_image(file_path)
+        await update.message.reply_text(description)
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+# --- FLASK + TELEGRAM ---
 flask_app = Flask(__name__)
-
-# Initialize Telegram bot app
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))  # Echo test
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+app.add_handler(MessageHandler(filters.PHOTO, handle_image))
 
-# --- Async loop for webhook updates ---
 main_loop = asyncio.get_event_loop()
 
 @flask_app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), app.bot)
-    # Schedule update processing in the bot's event loop
     asyncio.run_coroutine_threadsafe(app.process_update(update), main_loop)
     return "OK"
 
@@ -76,11 +86,9 @@ async def set_webhook():
 
 # --- RUN ---
 if __name__ == "__main__":
-    # 1️⃣ Initialize and start Telegram bot
+    # Initialize bot only once
     main_loop.run_until_complete(app.initialize())
     main_loop.run_until_complete(set_webhook())
-    main_loop.run_until_complete(app.start())
-    print("🤖 Bot initialized and running!")
-
-    # 2️⃣ Start Flask server
+    main_loop.run_until_complete(app.start())  # start the bot
+    print("🤖 Bot initialized and running (webhook mode)")
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
