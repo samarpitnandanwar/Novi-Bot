@@ -6,9 +6,9 @@ from flask import Flask, request
 import asyncio
 
 # --- CONFIG ---
-TELEGRAM_TOKEN = os.environ.get("7548833145:AAFCtS6XTxfS7G2qe38gSBO12HnKbBFuibE")
-GROQ_API_KEY = os.environ.get("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")
-BOT_URL = os.environ.get("https://novi-bot.onrender.com")  # e.g., https://your-app.onrender.com
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+BOT_URL = os.environ.get("BOT_URL")
 
 print("TELEGRAM_TOKEN =", os.environ.get("TELEGRAM_TOKEN"))
 print("GROQ_API_KEY =", os.environ.get("GROQ_API_KEY"))
@@ -100,4 +100,5 @@ if __name__ == "__main__":
     # Start the bot and Flask server
     app.start()
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
