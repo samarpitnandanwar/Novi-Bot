@@ -1,114 +1,91 @@
 import os
-import logging
+import requests
 import asyncio
 from flask import Flask, request
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import requests
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# ======================
-# Logging
-# ======================
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
-logger = logging.getLogger(__name__)
+# --- CONFIG ---
+TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
+GROQ_API_KEY = os.environ["GROQ_API_KEY"]
+BOT_URL = os.environ["BOT_URL"]  # e.g., https://your-bot.onrender.com
 
-# ======================
-# Config
-# ======================
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-BOT_URL = os.environ.get("BOT_URL")  # e.g. https://mybot.onrender.com
+# --- HELPERS ---
+def call_groq_api(prompt: str) -> str:
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    data = {"model": "llama3-8b-8192", "messages": [{"role": "user", "content": prompt}]}
+    response = requests.post(url, headers=headers, json=data)
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
 
-if not TELEGRAM_TOKEN:
-    raise ValueError("❌ TELEGRAM_TOKEN environment variable is missing!")
-if not BOT_URL:
-    raise ValueError("❌ BOT_URL environment variable is missing!")
+def call_groq_image(file_path: str) -> str:
+    url = "https://api.groq.com/v1/vision/describe"
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
+    with open(file_path, "rb") as f:
+        files = {"file": f}
+        response = requests.post(url, headers=headers, files=files)
+    response.raise_for_status()
+    return response.json().get("description", "Could not describe image.")
 
-# ======================
-# Flask app
-# ======================
-flask_app = Flask(__name__)
-
-# ======================
-# Telegram Application
-# ======================
-app = Application.builder().token(TELEGRAM_TOKEN).build()
-
-# Groq API call (dummy example, replace with real API call)
-def call_groq_api(text: str) -> str:
-    try:
-        logger.info(f"🔮 Sending to Groq API: {text}")
-        # Replace this with your actual Groq API request
-        response = {"answer": f"Echo: {text}"}
-        return response["answer"]
-    except Exception as e:
-        logger.exception("❌ Groq API call failed")
-        return f"Error contacting Groq API: {e}"
-
-# ======================
-# Handlers
-# ======================
+# --- TELEGRAM HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"🚀 /start command from {update.effective_user.id}")
-    await update.message.reply_text("Hello! I am alive 🤖")
+    await update.message.reply_text("Hello! Send me text or an image, and I'll answer or describe it.")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Thinking... 🤖")
     try:
-        user_msg = update.message.text
-        logger.info(f"💬 User said: {user_msg}")
-
-        await update.message.reply_text("Thinking... 🤖")
-
-        answer = call_groq_api(user_msg)
-        logger.info(f"🤖 Bot reply: {answer}")
-
+        answer = call_groq_api(update.message.text)
         await update.message.reply_text(answer)
-
     except Exception as e:
-        logger.exception("❌ Error in handle_text")
         await update.message.reply_text(f"Error: {e}")
 
-# Register handlers
+async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    photo = update.message.photo[-1]
+    file = await context.bot.get_file(photo.file_id)
+    file_path = f"temp_{photo.file_id}.jpg"
+    await file.download_to_drive(file_path)
+    await update.message.reply_text("Analyzing image... 🖼️")
+    try:
+        description = call_groq_image(file_path)
+        await update.message.reply_text(description)
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+# --- TELEGRAM APP ---
+app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+app.add_handler(MessageHandler(filters.PHOTO, handle_image))
 
-# ======================
-# Webhook Route
-# ======================
+# Initialize the application for webhook processing
+loop = asyncio.get_event_loop()
+loop.run_until_complete(app.initialize())
+loop.run_until_complete(app.start())  # start internal tasks
+
+# --- FLASK APP ---
+flask_app = Flask(__name__)
+
 @flask_app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), app.bot)
-    logger.info(f"📩 Incoming update: {update.to_dict()}")
-    try:
-        asyncio.run_coroutine_threadsafe(app.process_update(update), main_loop).result()
-    except Exception as e:
-        logger.exception("❌ Failed to process update")
+    asyncio.run_coroutine_threadsafe(app.process_update(update), loop)
     return "OK"
 
-# ======================
-# Startup
-# ======================
+@flask_app.route("/")
+def index():
+    return "🤖 Bot is running on Render!"
+
+# --- SET WEBHOOK ---
 async def set_webhook():
     webhook_url = f"{BOT_URL}/{TELEGRAM_TOKEN}"
-    await app.bot.delete_webhook()  # clear old webhook
     await app.bot.set_webhook(webhook_url)
-    me = await app.bot.get_me()
-    logger.info(f"✅ Webhook set: {webhook_url} for bot {me.username}")
+    print(f"✅ Webhook set to: {webhook_url}")
 
+# --- RUN ---
 if __name__ == "__main__":
-    main_loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(main_loop)
-    main_loop.create_task(set_webhook())
-
-    import threading
-    def run_loop(loop):
-        asyncio.set_event_loop(loop)
-        loop.run_forever()
-
-    threading.Thread(target=run_loop, args=(main_loop,), daemon=True).start()
-
-    port = int(os.environ.get("PORT", 5000))
-    flask_app.run(host="0.0.0.0", port=port)
-
+    loop.run_until_complete(set_webhook())
+    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
