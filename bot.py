@@ -1,11 +1,14 @@
 import os
 import requests
-from telegram import Update, InputFile
+from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from flask import Flask, request
+import asyncio
 
-# --- CONFIG ---
-TELEGRAM_TOKEN = "7548833145:AAFCtS6XTxfS7G2qe38gSBO12HnKbBFuibE"
-GROQ_API_KEY = "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"
+# --- CONFIG (use environment variables) ---
+TELEGRAM_TOKEN = os.environ.get("7548833145:AAFCtS6XTxfS7G2qe38gSBO12HnKbBFuibE")
+GROQ_API_KEY = os.environ.get("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")
+BOT_URL = os.environ.get("https://novi-bot.onrender.com")  # e.g., https://your-app.onrender.com
 
 # --- HELPERS ---
 
@@ -34,7 +37,6 @@ def call_groq_image(file_path: str) -> str:
         response = requests.post(url, headers=headers, files=files)
     response.raise_for_status()
     result = response.json()
-    # Return description or detected text
     return result.get("description", "Could not describe image.")
 
 # --- TELEGRAM HANDLERS ---
@@ -67,13 +69,36 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if os.path.exists(file_path):
             os.remove(file_path)
 
-# --- MAIN ---
+# --- FLASK APP ---
 
+flask_app = Flask(__name__)
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
+# Register handlers
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 app.add_handler(MessageHandler(filters.PHOTO, handle_image))
 
-print("Bot is running...")
-app.run_polling()
+# Webhook endpoint for Telegram
+@flask_app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), app.bot)
+    app.update_queue.put(update)
+    return "OK"
+
+# Basic index route
+@flask_app.route("/")
+def index():
+    return "Bot is running!"
+
+# --- SET WEBHOOK ON STARTUP ---
+async def set_webhook():
+    webhook_url = f"{BOT_URL}/{TELEGRAM_TOKEN}"
+    await app.bot.set_webhook(webhook_url)
+    print(f"Webhook set to: {webhook_url}")
+
+# --- RUN BOT AND FLASK ---
+if __name__ == "__main__":
+    asyncio.run(set_webhook())
+    app.start()
+    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
