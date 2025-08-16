@@ -10,6 +10,14 @@ TELEGRAM_TOKEN = os.environ.get("7548833145:AAFCtS6XTxfS7G2qe38gSBO12HnKbBFuibE"
 GROQ_API_KEY = os.environ.get("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")
 BOT_URL = os.environ.get("https://novi-bot.onrender.com")  # e.g., https://your-app.onrender.com
 
+# Validate environment variables
+if not TELEGRAM_TOKEN:
+    raise ValueError("TELEGRAM_TOKEN environment variable is missing!")
+if not GROQ_API_KEY:
+    raise ValueError("GROQ_API_KEY environment variable is missing!")
+if not BOT_URL:
+    raise ValueError("RENDER_URL environment variable is missing!")
+
 # --- HELPERS ---
 def call_groq_api(prompt: str) -> str:
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -65,6 +73,7 @@ app.add_handler(MessageHandler(filters.PHOTO, handle_image))
 
 @flask_app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
+    """Receive updates from Telegram via webhook"""
     update = Update.de_json(request.get_json(force=True), app.bot)
     app.update_queue.put(update)
     return "OK"
@@ -81,7 +90,8 @@ async def set_webhook():
 
 # --- RUN ---
 if __name__ == "__main__":
+    # First, set the webhook
     asyncio.run(set_webhook())
+    # Start the bot and Flask server
     app.start()
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-
