@@ -2,15 +2,16 @@ import os
 import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
-from flask import Flask, request
+from aiohttp import web
 
 # --- CONFIG ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 BOT_URL = os.environ.get("BOT_URL")  # e.g., https://your-app.onrender.com
+PORT = int(os.environ.get("PORT", 10000))
 
 if not TELEGRAM_TOKEN or not GROQ_API_KEY or not BOT_URL:
-    raise ValueError("Environment variables TELEGRAM_TOKEN, GROQ_API_KEY, BOT_URL must be set")
+    raise ValueError("TELEGRAM_TOKEN, GROQ_API_KEY, BOT_URL must be set as environment variables.")
 
 # --- HELPERS ---
 def call_groq_api(prompt: str) -> str:
@@ -57,26 +58,28 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if os.path.exists(file_path):
             os.remove(file_path)
 
-# --- FLASK APP ---
-flask_app = Flask(__name__)
+# --- APPLICATION ---
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 app.add_handler(MessageHandler(filters.PHOTO, handle_image))
 
-@flask_app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), app.bot)
-    app.create_task(app.process_update(update))
-    return "OK"
+# --- AIOHTTP SERVER ---
+async def handle_webhook(request):
+    data = await request.json()
+    update = Update.de_json(data, app.bot)
+    await app.process_update(update)
+    return web.Response(text="OK")
 
-@flask_app.route("/")
-def index():
-    return "🤖 Bot is running on Render!"
+async def init_app():
+    webhook_url = f"{BOT_URL}/{TELEGRAM_TOKEN}"
+    await app.bot.set_webhook(webhook_url)
+    print(f"✅ Webhook set to: {webhook_url}")
+    
+    aio_app = web.Application()
+    aio_app.router.add_post(f"/{TELEGRAM_TOKEN}", handle_webhook)
+    return aio_app
 
-# --- SET WEBHOOK AND RUN ---
 if __name__ == "__main__":
-    import asyncio
-    asyncio.get_event_loop().run_until_complete(app.bot.set_webhook(f"{BOT_URL}/{TELEGRAM_TOKEN}"))
-    print(f"✅ Webhook set to {BOT_URL}/{TELEGRAM_TOKEN}")
-    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    aio_app = asyncio.run(init_app())
+    web.run_app(aio_app, host="0.0.0.0", port=PORT)
