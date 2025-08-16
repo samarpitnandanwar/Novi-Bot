@@ -1,20 +1,22 @@
 import os
 import requests
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-from flask import Flask, request
 import asyncio
+from telegram import Update
+from telegram.ext import (
+    Application,
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
+from flask import Flask, request
 
 # --- CONFIG ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 BOT_URL = os.environ.get("BOT_URL")  # e.g., https://your-app.onrender.com
 
-print("TELEGRAM_TOKEN =", TELEGRAM_TOKEN)
-print("GROQ_API_KEY =", GROQ_API_KEY)
-print("BOT_URL =", BOT_URL)
-
-# Validate env vars
 if not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_TOKEN environment variable is missing!")
 if not GROQ_API_KEY:
@@ -67,31 +69,40 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if os.path.exists(file_path):
             os.remove(file_path)
 
-# --- FLASK + TELEGRAM APP ---
+# --- FLASK APP ---
 flask_app = Flask(__name__)
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
+# Add handlers
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 app.add_handler(MessageHandler(filters.PHOTO, handle_image))
 
+# Flask route to receive Telegram updates
 @flask_app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
-async def webhook():
-    """Receive updates from Telegram via webhook"""
+def webhook():
     update = Update.de_json(request.get_json(force=True), app.bot)
-    await app.process_update(update)  # direct handler instead of polling
+    # Feed update into Telegram application queue (sync-safe)
+    app.update_queue.put_nowait(update)
     return "OK"
 
 @flask_app.route("/")
 def index():
     return "🤖 Bot is running on Render!"
 
-# --- SET WEBHOOK ON STARTUP ---
+# --- STARTUP ---
 async def set_webhook():
     webhook_url = f"{BOT_URL}/{TELEGRAM_TOKEN}"
     await app.bot.set_webhook(webhook_url)
     print(f"✅ Webhook set to: {webhook_url}")
 
 if __name__ == "__main__":
-    asyncio.run(set_webhook())  # set webhook once
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(set_webhook())
+
+    # Run Telegram app in background
+    loop.create_task(app.initialize())
+    loop.create_task(app.start())
+
+    # Run Flask (blocking)
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
