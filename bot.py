@@ -8,7 +8,7 @@ import asyncio
 # --- CONFIG ---
 TELEGRAM_TOKEN = os.environ.get("7548833145:AAFCtS6XTxfS7G2qe38gSBO12HnKbBFuibE")
 GROQ_API_KEY = os.environ.get("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")
-BOT_URL = os.environ.get("RENDER_URL")  # e.g., https://your-app.onrender.com
+BOT_URL = os.environ.get("https://novi-bot.onrender.com")  # e.g., https://your-app.onrender.com
 
 # --- HELPERS ---
 def call_groq_api(prompt: str) -> str:
@@ -84,3 +84,4 @@ if __name__ == "__main__":
     asyncio.run(set_webhook())
     app.start()
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
