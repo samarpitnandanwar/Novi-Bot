@@ -53,11 +53,14 @@ app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
+# keep a reference to main loop
+main_loop = asyncio.get_event_loop()
+
 @flask_app.route(f"/{TELEGRAM_TOKEN}", methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), app.bot)
-    # enqueue the update
-    asyncio.get_event_loop().create_task(app.process_update(update))
+    # run coroutine safely in the main loop
+    asyncio.run_coroutine_threadsafe(app.process_update(update), main_loop)
     return "OK"
 
 @flask_app.route("/")
@@ -71,7 +74,5 @@ async def set_webhook():
     print(f"✅ Webhook set to: {webhook_url}")
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(set_webhook())
-    # Run Flask (blocking)
+    main_loop.run_until_complete(set_webhook())
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
