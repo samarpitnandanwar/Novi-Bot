@@ -81,12 +81,11 @@ app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 def webhook():
     update = Update.de_json(request.get_json(force=True), app.bot)
     logger.info(f"📩 Incoming update: {update.to_dict()}")
-    asyncio.run_coroutine_threadsafe(app.process_update(update), main_loop)
+    try:
+        asyncio.run_coroutine_threadsafe(app.process_update(update), main_loop).result()
+    except Exception as e:
+        logger.exception("❌ Failed to process update")
     return "OK"
-
-@flask_app.route("/", methods=["GET"])
-def index():
-    return "🤖 Bot is running!"
 
 # ======================
 # Startup
@@ -112,3 +111,4 @@ if __name__ == "__main__":
 
     port = int(os.environ.get("PORT", 5000))
     flask_app.run(host="0.0.0.0", port=port)
+
