@@ -8,12 +8,11 @@ import asyncio
 # --- CONFIG ---
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-BOT_URL = os.environ.get("BOT_URL")
+BOT_URL = os.environ.get("BOT_URL")  # e.g., https://your-app.onrender.com
 
-print("TELEGRAM_TOKEN =", os.environ.get("TELEGRAM_TOKEN"))
-print("GROQ_API_KEY =", os.environ.get("GROQ_API_KEY"))
-print("BOT_URL =", os.environ.get("BOT_URL"))
-
+print("TELEGRAM_TOKEN =", TELEGRAM_TOKEN)
+print("GROQ_API_KEY =", GROQ_API_KEY)
+print("BOT_URL =", BOT_URL)
 
 # Validate environment variables
 if not TELEGRAM_TOKEN:
@@ -21,7 +20,7 @@ if not TELEGRAM_TOKEN:
 if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY environment variable is missing!")
 if not BOT_URL:
-    raise ValueError("RENDER_URL environment variable is missing!")
+    raise ValueError("BOT_URL environment variable is missing!")
 
 # --- HELPERS ---
 def call_groq_api(prompt: str) -> str:
@@ -80,25 +79,24 @@ app.add_handler(MessageHandler(filters.PHOTO, handle_image))
 def webhook():
     """Receive updates from Telegram via webhook"""
     update = Update.de_json(request.get_json(force=True), app.bot)
-    app.update_queue.put(update)
+    asyncio.create_task(app.update_queue.put(update))  # fixed async issue
     return "OK"
 
 @flask_app.route("/")
 def index():
-    return "Bot is running on Render!"
+    return "🤖 Bot is running on Render!"
 
 # --- SET WEBHOOK ---
 async def set_webhook():
     webhook_url = f"{BOT_URL}/{TELEGRAM_TOKEN}"
     await app.bot.set_webhook(webhook_url)
-    print(f"Webhook set to: {webhook_url}")
+    print(f"✅ Webhook set to: {webhook_url}")
 
 # --- RUN ---
 if __name__ == "__main__":
-    # First, set the webhook
+    # Set webhook once before starting
     asyncio.run(set_webhook())
-    # Start the bot and Flask server
-    app.start()
+
+    # Start bot + Flask
+    app.run_polling(stop_signals=None, close_loop=False)  # background loop
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-
-
